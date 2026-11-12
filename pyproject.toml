@@ -1,0 +1,44 @@
+[project]
+name = "agent-runtime"
+version = "0.1.0"
+description = "A minimal extensible agent runtime with native tool calling"
+readme = "README.md"
+authors = [
+    { name = "AntiToska", email = "1107858106@qq.com" }
+]
+requires-python = ">=3.15"
+dependencies = [
+    "openai>=3.49.0",
+    "pydantic>=2.14.3",
+    "tenacity>=9.2.1",
+]
+
+[project.scripts]
+agent-runtime = "agent_runtime:main"
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py315"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.15"
+strict = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-config --strict-markers"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "ruff>=0.17.4",
+]
