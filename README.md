@@ -69,6 +69,42 @@ uv.lock             可复现依赖版本
 
 ## 后续开发顺序
 
+### 代码层级约定
+
+采用按职责划分的小型结构；下列标注“计划”的文件在实现相应能力时再创建。
+
+```text
+src/agent_runtime/
+├── __init__.py          包初始化与现有 main 入口
+├── __main__.py          python -m agent_runtime 启动入口
+├── tools/
+│   ├── __init__.py      工具子包初始化
+│   └── add.py           AddArgs 参数模型；后续添加 add 工具函数
+├── schemas.py          [计划] 通用 Action / Observation 数据模型
+├── registry.py         [计划] 工具定义与注册、按名称查找
+├── executor.py         [计划] 校验、执行、异常处理、超时与重试
+├── runtime.py          [计划] 调度循环、上下文管理与终止条件
+└── model_client.py     [计划] 模型 SDK 接入与消息格式转换
+
+tests/
+├── test_smoke.py        启动冒烟测试
+├── tools/
+│   └── test_add.py      [计划] 加法工具与参数校验测试
+├── test_registry.py    [计划] 注册表测试
+├── test_executor.py    [计划] 执行器测试
+└── test_runtime.py     [计划] 使用模拟模型的循环测试
+```
+
+约定：
+
+- 工具专用参数模型与工具函数放在同一文件，例如 `tools/add.py`；只有跨工具共用的协议才放入 `schemas.py`。
+- Python 文件名使用小写下划线，类名使用大驼峰；不要求一个类对应一个文件。
+- 工具模块不负责调用模型；执行器不决定对话下一步；调度循环通过执行器调用工具。
+- `__init__.py` 保持简单，不堆放业务代码；现有启动函数后续扩展时再迁出。
+- 测试集中放在项目根目录的 `tests/` 中，目录尽量对应源码职责。
+
+### 实现顺序
+
 1. 定义 action / observation 数据模型和基于 Pydantic 的工具注册表。
 2. 实现工具执行器：参数校验、异常结构化、超时与重试；写工具避免默认重试。
 3. 实现模型适配与调度循环，增加最大轮数和终止条件。

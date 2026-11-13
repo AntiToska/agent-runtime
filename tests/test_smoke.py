@@ -13,5 +13,7 @@ def test_module_entrypoint() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "Hello from agent-runtime!" in result.stdout
+
+
 if __name__ == "__main__":
     test_module_entrypoint()
