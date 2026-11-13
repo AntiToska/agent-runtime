@@ -3,6 +3,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from agent_runtime.registry import Tool, ToolRegistry
+from agent_runtime.schemas import ToolError, ToolResult
 from agent_runtime.tools.add import AddArgs, add
 
 
@@ -14,38 +15,29 @@ class ToolExecutor:
         self,
         name: str,
         args: dict[str, Any],
-    ) -> dict[str, Any]:
+    ) -> ToolResult:
         try:
             tool = self.tool_registry.get(name)
         except ValueError as error:
-            return {
-                "ok": False,
-                "error": {
-                    "code": "TOOL_NOT_FOUND",
-                    "message": str(error),
-                },
-            }
+            return ToolResult(
+                ok=False,
+                error=ToolError(code="TOOL_NOT_FOUND", message=str(error)),
+            )
         try:
             validated_args = tool.args_model.model_validate(args)
         except ValidationError as error:
-            return {
-                "ok": False,
-                "error": {
-                    "code": "INVALID_ARGUMENTS",
-                    "message": str(error),
-                },
-            }
+            return ToolResult(
+                ok=False,
+                error=ToolError(code="INVALID_ARGUMENTS", message=str(error)),
+            )
         try:
             result = tool.handler(validated_args)
         except Exception as error:
-            return {
-                "ok": False,
-                "error": {
-                    "code": "TOOL_EXECUTION_FAILED",
-                    "message": str(error),
-                },
-            }
-        return {"ok": True, "data": result}
+            return ToolResult(
+                ok=False,
+                error=ToolError(code="TOOL_EXECUTION_FAILED", message=str(error)),
+            )
+        return ToolResult(ok=True, data=result)
 
 
 if __name__ == "__main__":
@@ -62,5 +54,5 @@ if __name__ == "__main__":
     executor = ToolExecutor(registry)
 
     result = executor.execute("add", {"a": 1, "b": 2})
-    print(result)
-# {"ok": True, "data": 3}
+    print(result.model_dump())
+    # {"ok": True, "data": 3, "error": None}
