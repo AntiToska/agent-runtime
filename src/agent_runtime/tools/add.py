@@ -6,7 +6,6 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 class AddArgs(BaseModel):
     # 开启Pydantic的严格模式
     model_config = ConfigDict(strict=True)
-
     a: int
     b: int
 

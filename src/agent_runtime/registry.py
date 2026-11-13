@@ -19,6 +19,7 @@ class Tool[ArgsT: BaseModel, ResultT]:
         self.handler = handler
 
 
+# 工具注册类，初始化、新增、获取工具、获取工具说明
 class ToolRegistry:
     def __init__(self) -> None:
         self.tools: dict[str, Tool[Any, Any]] = {}
@@ -32,3 +33,15 @@ class ToolRegistry:
         if name not in self.tools:
             raise ValueError(f"Tool {name} not found")
         return self.tools[name]
+
+    def get_tool_schemas(self) -> list[dict[str, Any]]:
+        schemas = []
+        for tool in self.tools.values():
+            schemas.append(
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.args_model.model_json_schema(),
+                }
+            )
+        return schemas
