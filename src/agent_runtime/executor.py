@@ -2,7 +2,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from agent_runtime.registry import Tool, ToolRegistry
+from agent_runtime.registry import Tool, ToolEffect, ToolRegistry
 from agent_runtime.schemas import ToolError, ToolResult
 from agent_runtime.tools.add import AddArgs, add
 
@@ -30,6 +30,18 @@ class ToolExecutor:
                 ok=False,
                 error=ToolError(code="INVALID_ARGUMENTS", message=str(error)),
             )
+        if tool.effect == ToolEffect.WRITE:
+            print(f"准备执行写操作：{tool.name}")
+            print("参数：", validated_args.model_dump())
+            confirmation = input("确认执行？输入 yes 继续：").strip().lower()
+            if confirmation != "yes":
+                return ToolResult(
+                    ok=False,
+                    error=ToolError(
+                        code="USER_REJECTED",
+                        message="用户未确认，操作未执行",
+                    ),
+                )
         try:
             result = tool.handler(validated_args)
         except Exception as error:
@@ -47,6 +59,7 @@ if __name__ == "__main__":
             name="add",
             description="两个整数相加",
             args_model=AddArgs,
+            effect=ToolEffect.READ,
             handler=add,
         )
     )

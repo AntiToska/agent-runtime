@@ -1,14 +1,16 @@
+from unittest.mock import Mock, patch
+
 import pytest
 
 from agent_runtime.executor import ToolExecutor
-from agent_runtime.registry import Tool, ToolRegistry
+from agent_runtime.registry import Tool, ToolEffect, ToolRegistry
 from agent_runtime.schemas import ToolResult
 from agent_runtime.tools.add import AddArgs, add
 
 
 def test_execute_returns_success_model() -> None:
     registry = ToolRegistry()
-    registry.register(Tool("add", "Add integers", AddArgs, add))
+    registry.register(Tool("add", "Add integers", AddArgs, ToolEffect.READ, add))
 
     result = ToolExecutor(registry).execute("add", {"a": 1, "b": 2})
 
@@ -38,7 +40,7 @@ def test_invalid_arguments_do_not_call_handler(arguments: dict[str, object]) -> 
         return add(args)
 
     registry = ToolRegistry()
-    registry.register(Tool("add", "Add integers", AddArgs, handler))
+    registry.register(Tool("add", "Add integers", AddArgs, ToolEffect.READ, handler))
 
     result = ToolExecutor(registry).execute("add", arguments)
 
@@ -56,7 +58,7 @@ def test_handler_exception_is_execution_failure(exception_type: type[Exception])
         raise exception_type("tool failed")
 
     registry = ToolRegistry()
-    registry.register(Tool("fail", "Fail deliberately", AddArgs, handler))
+    registry.register(Tool("fail", "Fail deliberately", AddArgs, ToolEffect.READ, handler))
 
     result = ToolExecutor(registry).execute("fail", {"a": 1, "b": 2})
 
@@ -65,3 +67,91 @@ def test_handler_exception_is_execution_failure(exception_type: type[Exception])
     assert result.error is not None
     assert result.error.code == "TOOL_EXECUTION_FAILED"
     assert result.error.message == "tool failed"
+
+
+def test_read_tool_does_not_request_confirmation() -> None:
+    registry = ToolRegistry()
+    registry.register(Tool("add", "Add integers", AddArgs, ToolEffect.READ, add))
+
+    with patch("builtins.input") as confirm:
+        result = ToolExecutor(registry).execute("add", {"a": 1, "b": 2})
+
+    confirm.assert_not_called()
+    assert result.ok is True
+    assert result.data == 3
+
+
+@pytest.mark.parametrize("answer", ["yes", " YES "])
+def test_write_tool_executes_once_after_confirmation(answer: str) -> None:
+    handler = Mock(return_value=3)
+    registry = ToolRegistry()
+    registry.register(Tool("write", "Write demo", AddArgs, ToolEffect.WRITE, handler))
+
+    def confirm(prompt: str) -> str:
+        handler.assert_not_called()
+        return answer
+
+    with patch("builtins.input", side_effect=confirm) as ask:
+        result = ToolExecutor(registry).execute("write", {"a": 1, "b": 2})
+
+    ask.assert_called_once()
+    handler.assert_called_once_with(AddArgs(a=1, b=2))
+    assert result.ok is True
+    assert result.data == 3
+
+
+@pytest.mark.parametrize("answer", ["no", "", "y", "anything"])
+def test_write_tool_rejection_has_no_side_effect(answer: str) -> None:
+    handler = Mock(return_value=3)
+    registry = ToolRegistry()
+    registry.register(Tool("write", "Write demo", AddArgs, ToolEffect.WRITE, handler))
+
+    with patch("builtins.input", return_value=answer) as confirm:
+        result = ToolExecutor(registry).execute("write", {"a": 1, "b": 2})
+
+    confirm.assert_called_once()
+    handler.assert_not_called()
+    assert result.ok is False
+    assert result.data is None
+    assert result.error is not None
+    assert result.error.code == "USER_REJECTED"
+
+
+def test_invalid_write_arguments_do_not_prompt_or_execute() -> None:
+    handler = Mock()
+    registry = ToolRegistry()
+    registry.register(Tool("write", "Write demo", AddArgs, ToolEffect.WRITE, handler))
+
+    with patch("builtins.input") as confirm:
+        result = ToolExecutor(registry).execute("write", {"a": "1", "b": 2})
+
+    confirm.assert_not_called()
+    handler.assert_not_called()
+    assert result.error is not None
+    assert result.error.code == "INVALID_ARGUMENTS"
+
+
+@pytest.mark.parametrize("error_type", [EOFError, KeyboardInterrupt])
+def test_confirmation_interruption_does_not_execute(error_type: type[BaseException]) -> None:
+    handler = Mock()
+    registry = ToolRegistry()
+    registry.register(Tool("write", "Write demo", AddArgs, ToolEffect.WRITE, handler))
+
+    with patch("builtins.input", side_effect=error_type), pytest.raises(error_type):
+        ToolExecutor(registry).execute("write", {"a": 1, "b": 2})
+
+    handler.assert_not_called()
+
+
+def test_confirmed_write_failure_returns_execution_error() -> None:
+    handler = Mock(side_effect=RuntimeError("write failed"))
+    registry = ToolRegistry()
+    registry.register(Tool("write", "Write demo", AddArgs, ToolEffect.WRITE, handler))
+
+    with patch("builtins.input", return_value="yes"):
+        result = ToolExecutor(registry).execute("write", {"a": 1, "b": 2})
+
+    handler.assert_called_once()
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code == "TOOL_EXECUTION_FAILED"

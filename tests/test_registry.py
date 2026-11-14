@@ -1,13 +1,17 @@
 import pytest
 
-from agent_runtime.registry import Tool, ToolRegistry
+from agent_runtime.registry import Tool, ToolEffect, ToolRegistry
 from agent_runtime.tools.add import AddArgs, add
 
 
 def test_get_returns_registered_tool() -> None:
     registry = ToolRegistry()
     tool = Tool[AddArgs, int](
-        name="add", description="Add two integers", args_model=AddArgs, handler=add
+        name="add",
+        description="Add two integers",
+        args_model=AddArgs,
+        effect=ToolEffect.READ,
+        handler=add,
     )
 
     registry.register(tool)
@@ -18,10 +22,18 @@ def test_get_returns_registered_tool() -> None:
 def test_duplicate_registration_preserves_original() -> None:
     registry = ToolRegistry()
     original = Tool[AddArgs, int](
-        name="add", description="Original tool", args_model=AddArgs, handler=add
+        name="add",
+        description="Original tool",
+        args_model=AddArgs,
+        effect=ToolEffect.READ,
+        handler=add,
     )
     replacement = Tool[AddArgs, int](
-        name="add", description="Replacement tool", args_model=AddArgs, handler=add
+        name="add",
+        description="Replacement tool",
+        args_model=AddArgs,
+        effect=ToolEffect.READ,
+        handler=add,
     )
     registry.register(original)
 

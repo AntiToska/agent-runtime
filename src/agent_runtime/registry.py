@@ -1,7 +1,13 @@
 from collections.abc import Callable
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
+
+
+class ToolEffect(StrEnum):
+    READ = "read"
+    WRITE = "write"
 
 
 # 保存工具配置的对象：名称、说明、参数类、执行函数。
@@ -11,11 +17,13 @@ class Tool[ArgsT: BaseModel, ResultT]:
         name: str,
         description: str,
         args_model: type[ArgsT],
+        effect: ToolEffect,
         handler: Callable[[ArgsT], ResultT],
     ) -> None:
         self.name = name
         self.description = description
         self.args_model = args_model
+        self.effect = effect
         self.handler = handler
 
 

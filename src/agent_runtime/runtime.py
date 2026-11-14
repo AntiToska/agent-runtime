@@ -7,7 +7,7 @@ from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
 
 from agent_runtime.executor import ToolExecutor
 from agent_runtime.model_client import DeepSeekClient
-from agent_runtime.registry import Tool, ToolRegistry
+from agent_runtime.registry import Tool, ToolEffect, ToolRegistry
 from agent_runtime.schemas import ToolError, ToolResult
 from agent_runtime.tools.add import AddArgs, add
 
@@ -23,6 +23,7 @@ class AgentRuntime:
                 name="add",
                 description="两个整数相加",
                 args_model=AddArgs,
+                effect=ToolEffect.READ,
                 handler=add,
             )
         )
