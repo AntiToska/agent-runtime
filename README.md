@@ -1,114 +1,202 @@
 # agent-runtime
 
-用原生 tool calling 实现一个极简、可扩展的 Agent 调度器，重点展示运行时基础能力，而非仅封装框架。
+使用原生 tool calling 实现极简 Agent 运行时，不依赖 LangChain。模型负责提出工具调用，程序负责查找工具、校验参数、执行与回传结果，直到模型回答或触发终止条件。
 
-目标流程：模型输出结构化 action → 路由到工具注册表 → 校验并执行工具 → 捕获异常、返回 observation → 放回上下文继续循环。
+## 当前能力
 
-计划支持注册式工具、参数 Schema 校验、超时、重试、读写副作用区分，以及人工确认点（human-in-the-loop）。
+- 泛型 `Tool` 保存名称、描述、参数模型、执行函数、读写类型和超时时间。
+- `ToolRegistry` 按名称注册与查找工具，拒绝重复名称，并导出工具参数 JSON Schema。
+- Pydantic 校验输入；`ToolResult` / `ToolError` 统一表达执行结果。
+- 执行器处理未知工具、非法参数、执行异常、人工拒绝和等待超时。
+- `ToolEffect.READ` 工具直接执行；`WRITE` 工具在参数校验后通过终端确认，只有输入 `yes` 才执行（忽略首尾空白和大小写）。
+- 后台线程执行工具，按工具配置限时等待，默认 10 秒；配置必须是有限正数。
+- DeepSeek 客户端与调度循环分离，支持一轮多个工具调用和连续多轮调用。
+- 保存用户消息、模型调用请求、工具结果和最终回答，通过 `tool_call_id` 对应请求与结果。
+- 最多请求模型 5 轮；正常回答时结束，输出截断时停止。
 
-## 当前状态
+当前具体工具只有整数加法 `add`。写工具确认由模拟工具测试覆盖，尚未提供真实写入业务工具。重试、幂等、强制取消和任务恢复尚未实现。
 
-已完成 Python 包骨架、依赖锁定、开发检查、启动冒烟测试和打包验证。入口目前输出 `Hello from agent-runtime!`；模型调用、工具注册表和调度循环尚未实现。
+## 快速开始
 
-## 开发环境
+环境：Python 3.15、uv；本机验证使用 Windows PowerShell 和 Python 3.15.2。依赖版本由 `uv.lock` 锁定。
 
-- Python 3.15（沿用 `.python-version`；本机验证版本为 3.15.2）。
-- uv 管理虚拟环境、依赖与构建；`uv.lock` 应提交到版本控制。
-- 运行依赖：OpenAI SDK、Pydantic、Tenacity。
-- 开发依赖：Ruff（代码检查与格式化）、mypy（严格类型检查）、pytest（测试）。
+在项目根目录安装依赖：
 
-Windows PowerShell 中，在项目目录运行：
+```powershell
+uv sync --locked
+```
+
+若 uv 不在 PATH，但已安装到用户目录，可使用项目脚本：
 
 ```powershell
 .\scripts\dev.ps1 setup
-.\scripts\dev.ps1 check
-.\scripts\dev.ps1 run
 ```
 
-脚本优先使用 PATH 中的 uv，也支持本机安装位置 `$env:USERPROFILE\.local\bin\uv.exe`，无需激活虚拟环境。每次运行先执行 `uv sync --locked`，保证配置与锁文件一致；任一步失败会停止。首次同步需要下载依赖。
+未安装 uv 时，参考 [uv 安装说明](https://docs.astral.sh/uv/getting-started/installation/)。
 
-若未安装 uv，可按 [uv 安装文档](https://docs.astral.sh/uv/getting-started/installation/) 安装后重新打开终端。若 PowerShell 提示脚本执行策略限制，可使用下方的 uv 命令，不必更改系统策略。
+### 配置 DeepSeek
 
-其他系统或已配置 uv 的终端可直接运行：
+仅在 `.env` 不存在时复制模板，避免覆盖已有配置：
 
-```sh
-uv sync --locked
-uv run --locked ruff check .
-uv run --locked ruff format --check .
-uv run --locked mypy
-uv run --locked pytest
-uv run --locked agent-runtime
-uv run --locked python -m agent_runtime
+```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-## 常用任务
+在 `.env` 中填写：
 
-| PowerShell 命令 | 用途 |
-| --- | --- |
-| `.\scripts\dev.ps1 setup` | 按锁文件安装运行和开发依赖 |
-| `.\scripts\dev.ps1 check` | 检查代码、格式、类型并运行测试 |
-| `.\scripts\dev.ps1 test` | 运行测试 |
-| `.\scripts\dev.ps1 format` | 格式化代码 |
-| `.\scripts\dev.ps1 run` | 启动当前入口 |
-| `.\scripts\dev.ps1 build` | 生成 wheel 和源码分发包到 `dist/` |
+```dotenv
+DEEPSEEK_API_KEY=你的实际Key
+DEEPSEEK_MODEL=deepseek-flash
+```
 
-新增运行依赖用 `uv add <包名>`，开发依赖用 `uv add --dev <包名>`；同时提交 `pyproject.toml` 与 `uv.lock`。不要手工修改锁文件。
+`DEEPSEEK_API_KEY` 必填；未设置 `DEEPSEEK_MODEL` 时，代码默认使用 `deepseek-flash`。模型名称应与账号可用模型一致。接口地址目前在运行时演示入口中设为 `https://api.deepseek.com`，客户端关闭思考模式。
 
-## 配置与目录
+程序通过 `os.environ` 读取配置，由 uv 加载 `.env`，不直接读取该文件。已有同名环境变量优先于 `.env`；修改文件后若仍使用旧配置，请检查当前终端变量。`.env` 已被 Git 忽略。
 
-`.env.example` 预留模型接入所需变量，可复制为 `.env`。当前入口不读取 `.env`，也不调用模型；启动和测试均不需要 API Key。接入模型时需显式实现配置读取。`.env`、虚拟环境、缓存和构建产物已加入 Git 忽略规则。
+### 运行真实模型演示
+
+```powershell
+uv run --env-file .env python -m agent_runtime.runtime
+```
+
+当前演示问题在 `runtime.py` 的直接运行入口中设为“1+123等于多少？”。它会请求真实模型，产生 API 用量。典型流程：
 
 ```text
-src/agent_runtime/   Python 包与启动入口
-tests/              无网络启动冒烟测试
-scripts/dev.ps1     Windows 开发任务入口
-docs/daily/         按日期记录的开发日报
-pyproject.toml      项目、依赖和检查配置
-uv.lock             可复现依赖版本
+第 1 轮：模型请求 add(a=1, b=123)
+执行器：返回 {"ok": true, "data": 124, "error": null}
+第 2 轮：模型根据工具结果回答
+最终回答：1 + 123 = 124
 ```
 
-## 后续开发顺序
+模型选择的步骤和回答文字可能不同。`AgentRuntime.run(user_input)` 接收问题并返回字符串；正常回答返回内容，截断与轮数耗尽目前返回提示文字，尚未抽象为运行状态对象。模型请求异常仍向调用方传播。
 
-### 代码层级约定
+注意入口区别：`uv run agent-runtime`、`python -m agent_runtime` 和 `scripts/dev.ps1 run` 目前仍是输出 `Hello from agent-runtime!` 的包骨架入口。真正的 Agent 演示使用上面的 `agent_runtime.runtime` 模块。`model_client.py` 现在只定义通信类，不再包含独立演示。
 
-采用按职责划分的小型结构；下列标注“计划”的文件在实现相应能力时再创建。
+## 执行流程
+
+```text
+用户问题 + 工具说明
+    ↓
+请求模型（最多 5 轮）
+    ├─ 输出截断 → 停止并返回提示
+    ├─ 无工具调用 → 记录并返回回答
+    └─ 有工具调用 → 记录模型请求
+                      ↓
+                 解析 JSON 参数
+                      ↓
+                 查找工具、校验参数
+                      ↓
+                 写工具请求人工确认
+                      ↓
+                 后台执行并限时等待
+                      ↓
+                 追加每个工具的结果 → 下一轮请求
+```
+
+工具执行失败也作为结果回传模型。人工确认不计入工具等待超时；确认输入关闭或被中断时，不执行工具，异常向外传播。
+
+## 工具定义
+
+工具专用参数模型和函数放在同一个文件，例如 `tools/add.py`。注册示例：
+
+```python
+from agent_runtime.registry import Tool, ToolEffect, ToolRegistry
+from agent_runtime.tools.add import AddArgs, add
+
+registry = ToolRegistry()
+registry.register(
+    Tool[AddArgs, int](
+        name="add",
+        description="两个整数相加",
+        args_model=AddArgs,
+        effect=ToolEffect.READ,
+        handler=add,
+        timeout_seconds=10.0,
+    )
+)
+```
+
+当前 `AgentRuntime.run()` 内部创建注册表并注册加法工具。新增工具需要在该处注册；外部注入注册表留待后续整理。读写标记由开发者指定，不接受模型自行指定执行权限。
+
+`ToolExecutor.execute(name, args)` 返回 `ToolResult`：通过 `.ok`、`.data`、`.error` 访问字段，通过 `.model_dump()` 转为字典，或 `.model_dump_json()` 转为 JSON 字符串。
+
+| 错误码 | 含义 |
+| --- | --- |
+| `TOOL_NOT_FOUND` | 工具不存在 |
+| `INVALID_ARGUMENTS` | 参数校验失败；运行时也用它表达 JSON 解析失败或输入不是对象 |
+| `USER_REJECTED` | 用户没有确认写操作，工具未执行 |
+| `TOOL_EXECUTION_FAILED` | 工具执行抛出异常 |
+| `TOOL_TIMEOUT` | 等待超过配置时限，工具可能仍在运行 |
+
+## 超时与当前边界
+
+- 模型请求在演示入口配置 `timeout=60.0`、`max_retries=0`；这与每个工具的等待超时是两套配置。
+- 工具使用 `ThreadPoolExecutor` 执行。超时只停止等待，不能强制终止正在运行的线程。
+- `shutdown(wait=False, cancel_futures=True)` 不等待活动任务，只取消尚未开始的任务；反复超时可能累积后台线程，进程退出仍可能等待线程完成。
+- 写操作超时不代表外部操作失败，不能据此盲目重试。当前没有自动重试，Tenacity 虽已安装但尚未接入。
+- 读写标记与确认不是沙箱或业务鉴权。工具自身仍需实现访问控制、输入约束等业务规则。
+- `ToolResult.data` 仍是 `Any`，尚未统一限制可序列化的返回类型。
+- 当前按 DeepSeek 接口实现；切换其他厂商不能保证只改 Key、模型和地址即可。尤其手动重建调用消息可能丢失 Gemini 等服务需要的附加字段，多厂商兼容尚未完成。
+
+## 开发与测试
+
+运行全部检查：
+
+```powershell
+.\scripts\dev.ps1 check
+```
+
+截至 2026-11-14，46 个本地测试通过，覆盖工具参数、注册与查找、执行结果、人工确认、线程等待超时、多轮历史、轮数限制、截断和客户端参数传递。测试使用模拟客户端，不读取真实 Key，也不发送模型请求。
+
+| 命令 | 用途 |
+| --- | --- |
+| `uv run ruff check .` | 代码规范检查 |
+| `uv run ruff check --select I --fix .` | 整理导入 |
+| `uv run ruff format .` | 格式化代码 |
+| `uv run mypy` | 严格类型检查 |
+| `uv run pytest` | 全部测试 |
+| `uv run pytest tests/test_executor.py -v` | 执行器测试 |
+| `.\scripts\dev.ps1 build` | 构建 wheel 和源码分发包到 `dist/` |
+
+脚本还提供 `setup`、`test`、`format`、`run` 任务，每次先执行 `uv sync --locked`，失败即停止。Cursor 项目设置位于 `.vscode/`，安装 Ruff 扩展后，显式保存 Python 文件可触发格式化、导入整理和安全自动修复。
+
+新增依赖使用 `uv add <包名>`，开发依赖使用 `uv add --dev <包名>`，同时提交 `pyproject.toml` 和 `uv.lock`。
+
+## 项目结构
 
 ```text
 src/agent_runtime/
-├── __init__.py          包初始化与现有 main 入口
-├── __main__.py          python -m agent_runtime 启动入口
-├── tools/
-│   ├── __init__.py      工具子包初始化
-│   └── add.py           AddArgs 参数模型；后续添加 add 工具函数
-├── schemas.py          [计划] 通用 Action / Observation 数据模型
-├── registry.py         [计划] 工具定义与注册、按名称查找
-├── executor.py         [计划] 校验、执行、异常处理、超时与重试
-├── runtime.py          [计划] 调度循环、上下文管理与终止条件
-└── model_client.py     [计划] 模型 SDK 接入与消息格式转换
+├── __init__.py       原有包骨架入口
+├── __main__.py       python -m agent_runtime 入口
+├── registry.py       Tool、ToolEffect、ToolRegistry 与 Schema 导出
+├── executor.py       参数校验、人工确认、后台执行和等待超时
+├── schemas.py        ToolResult、ToolError
+├── model_client.py   DeepSeek 请求适配
+├── runtime.py        多轮循环及直接运行演示
+└── tools/add.py      AddArgs 参数模型与 add 函数
 
 tests/
-├── test_smoke.py        启动冒烟测试
-├── tools/
-│   └── test_add.py      [计划] 加法工具与参数校验测试
-├── test_registry.py    [计划] 注册表测试
-├── test_executor.py    [计划] 执行器测试
-└── test_runtime.py     [计划] 使用模拟模型的循环测试
+├── test_smoke.py         包启动测试
+├── test_registry.py      注册表与超时配置测试
+├── test_executor.py      执行器、确认与超时测试
+├── test_model_client.py  模型请求适配测试
+├── test_runtime.py       模拟模型的多轮循环测试
+└── tools/test_add.py     加法与参数校验测试
+
+scripts/dev.ps1       Windows 开发任务入口
+docs/daily/           开发日报
+.env.example          配置模板，不含真实 Key
+pyproject.toml        项目、依赖和检查配置
+uv.lock               依赖锁文件
 ```
 
-约定：
+## 后续计划
 
-- 工具专用参数模型与工具函数放在同一文件，例如 `tools/add.py`；只有跨工具共用的协议才放入 `schemas.py`。
-- Python 文件名使用小写下划线，类名使用大驼峰；不要求一个类对应一个文件。
-- 工具模块不负责调用模型；执行器不决定对话下一步；调度循环通过执行器调用工具。
-- `__init__.py` 保持简单，不堆放业务代码；现有启动函数后续扩展时再迁出。
-- 测试集中放在项目根目录的 `tests/` 中，目录尽量对应源码职责。
+1. 增加适用于读取操作的有限重试，区分错误类别；写操作引入幂等与状态确认。
+2. 完善任务执行隔离与资源限制，明确取消语义。
+3. 将人工确认抽成可替换接口，支持终端之外的调用方。
+4. 引入明确的运行状态结果，支持注册表注入和统一配置。
+5. 增加真实业务工具、结构化日志、耗时与 token 统计、固定任务评估。
+6. 完善多厂商消息适配、接口异常和任务恢复策略。
 
-### 实现顺序
-
-1. 定义 action / observation 数据模型和基于 Pydantic 的工具注册表。
-2. 实现工具执行器：参数校验、异常结构化、超时与重试；写工具避免默认重试。
-3. 实现模型适配与调度循环，增加最大轮数和终止条件。
-4. 增加读写工具权限与人工确认点，覆盖拒绝、失败和超时路径。
-5. 增加无网络模拟模型测试，再进行真实模型联调。
-
-开发记录见 [2026-11-12 日报](docs/daily/2026-11-12.md)。
+初始环境建设记录见 [2026-11-12 日报](docs/daily/2026-11-12.md)；该日报是当天快照，当前能力以本 README 和代码为准。

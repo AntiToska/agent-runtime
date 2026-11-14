@@ -1,3 +1,5 @@
+from concurrent.futures import wait
+from concurrent.futures.thread import ThreadPoolExecutor
 from typing import Any
 
 from pydantic import ValidationError
@@ -42,13 +44,31 @@ class ToolExecutor:
                         message="用户未确认，操作未执行",
                     ),
                 )
+        pool = ThreadPoolExecutor(max_workers=1)
         try:
-            result = tool.handler(validated_args)
+            future = pool.submit(tool.handler, validated_args)
+            done, _ = wait([future], timeout=tool.timeout_seconds)
+            if not done:
+                return ToolResult(
+                    ok=False,
+                    error=ToolError(
+                        code="TOOL_TIMEOUT",
+                        message=(
+                            f"工具 {tool.name} 超过 {tool.timeout_seconds} 秒未返回，"
+                            "已停止等待，但工具可能仍在后台执行"
+                        ),
+                    ),
+                )
+            # 工具已结束：获取返回值；如果工具抛了异常，这里会重新抛出。
+            result = future.result()
         except Exception as error:
             return ToolResult(
                 ok=False,
                 error=ToolError(code="TOOL_EXECUTION_FAILED", message=str(error)),
             )
+        finally:
+            # 不等待正在运行的任务；取消尚未开始的任务。
+            pool.shutdown(wait=False, cancel_futures=True)
         return ToolResult(ok=True, data=result)
 
 

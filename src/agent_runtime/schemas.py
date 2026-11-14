@@ -6,7 +6,13 @@ from pydantic import BaseModel
 
 
 class ToolError(BaseModel):
-    code: Literal["TOOL_NOT_FOUND", "INVALID_ARGUMENTS", "TOOL_EXECUTION_FAILED", "USER_REJECTED"]
+    code: Literal[
+        "TOOL_NOT_FOUND",
+        "INVALID_ARGUMENTS",
+        "TOOL_EXECUTION_FAILED",
+        "USER_REJECTED",
+        "TOOL_TIMEOUT",
+    ]
     message: str
 
 

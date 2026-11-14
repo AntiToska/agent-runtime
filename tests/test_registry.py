@@ -48,3 +48,15 @@ def test_get_unknown_tool_raises_error() -> None:
 
     with pytest.raises(ValueError, match="Tool missing not found"):
         registry.get("missing")
+
+
+@pytest.mark.parametrize("timeout", [0.0, -1.0, float("nan"), float("inf"), float("-inf")])
+def test_tool_rejects_invalid_timeout(timeout: float) -> None:
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        Tool("add", "Add", AddArgs, ToolEffect.READ, add, timeout_seconds=timeout)
+
+
+def test_tool_timeout_default_and_override() -> None:
+    assert Tool("add", "Add", AddArgs, ToolEffect.READ, add).timeout_seconds == 10.0
+    tool = Tool("add", "Add", AddArgs, ToolEffect.READ, add, timeout_seconds=0.25)
+    assert tool.timeout_seconds == 0.25

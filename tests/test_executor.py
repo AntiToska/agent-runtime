@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from unittest.mock import Mock, patch
 
 import pytest
@@ -67,6 +69,70 @@ def test_handler_exception_is_execution_failure(exception_type: type[Exception])
     assert result.error is not None
     assert result.error.code == "TOOL_EXECUTION_FAILED"
     assert result.error.message == "tool failed"
+
+
+def test_timeout_returns_before_background_tool_finishes() -> None:
+    started = Event()
+    release = Event()
+    finished = Event()
+
+    def handler(args: AddArgs) -> int:
+        started.set()
+        try:
+            if not release.wait(timeout=5):
+                raise RuntimeError("test did not release worker")
+            return add(args)
+        finally:
+            finished.set()
+
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            "slow", "Controlled slow tool", AddArgs, ToolEffect.READ, handler, timeout_seconds=0.05
+        )
+    )
+    with ThreadPoolExecutor(max_workers=1) as caller:
+        try:
+            pending = caller.submit(ToolExecutor(registry).execute, "slow", {"a": 1, "b": 2})
+            assert started.wait(timeout=2)
+            result = pending.result(timeout=2)
+            assert result.ok is False
+            assert result.error is not None
+            assert result.error.code == "TOOL_TIMEOUT"
+            assert not finished.is_set()
+        finally:
+            release.set()
+        assert finished.wait(timeout=2)
+
+
+def test_handler_timeout_error_is_not_executor_wait_timeout() -> None:
+    def handler(args: AddArgs) -> int:
+        raise TimeoutError("upstream request timed out")
+
+    registry = ToolRegistry()
+    registry.register(Tool("fail", "Fail immediately", AddArgs, ToolEffect.READ, handler))
+
+    result = ToolExecutor(registry).execute("fail", {"a": 1, "b": 2})
+
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code == "TOOL_EXECUTION_FAILED"
+    assert result.error.message == "upstream request timed out"
+
+
+def test_rejected_write_does_not_create_thread_pool() -> None:
+    registry = ToolRegistry()
+    registry.register(Tool("write", "Write demo", AddArgs, ToolEffect.WRITE, add))
+
+    with (
+        patch("builtins.input", return_value="no"),
+        patch("agent_runtime.executor.ThreadPoolExecutor") as pool,
+    ):
+        result = ToolExecutor(registry).execute("write", {"a": 1, "b": 2})
+
+    pool.assert_not_called()
+    assert result.error is not None
+    assert result.error.code == "USER_REJECTED"
 
 
 def test_read_tool_does_not_request_confirmation() -> None:

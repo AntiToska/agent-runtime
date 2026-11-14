@@ -1,3 +1,4 @@
+import math
 from collections.abc import Callable
 from enum import StrEnum
 from typing import Any
@@ -19,12 +20,16 @@ class Tool[ArgsT: BaseModel, ResultT]:
         args_model: type[ArgsT],
         effect: ToolEffect,
         handler: Callable[[ArgsT], ResultT],
+        timeout_seconds: float = 10.0,
     ) -> None:
         self.name = name
         self.description = description
         self.args_model = args_model
         self.effect = effect
         self.handler = handler
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds 必须是有限的正数")
+        self.timeout_seconds = timeout_seconds
 
 
 # 工具注册类，初始化、新增、获取工具、获取工具说明
