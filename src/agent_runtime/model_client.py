@@ -39,85 +39,90 @@ def main() -> None:
     ]
     model = os.environ.get("DEEPSEEK_MODEL", "deepseek-flash")
     executor = ToolExecutor(registry)
-
+    max_rounds = 5
     with OpenAI(
         api_key=os.environ["DEEPSEEK_API_KEY"],
         base_url="https://api.deepseek.com",
         timeout=60.0,
         max_retries=0,
     ) as client:
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages.copy(),
-            tools=tools,
-            extra_body={"thinking": {"type": "disabled"}},
-        )
-
-        message = response.choices[0].message
-        if not message.tool_calls:
-            print("模型没有请求工具调用，回答：", message.content)
-            return
-
-        # 当前只向模型提供 function 工具。
-        function_calls = [call for call in message.tool_calls if call.type == "function"]
-        if len(function_calls) != len(message.tool_calls):
-            raise ValueError("模型返回了不支持的工具调用类型")
-
-        # 2. 先记录模型的完整调用请求，再逐个追加对应结果。
-        messages.append(
-            {
-                "role": "assistant",
-                "content": message.content,
-                "tool_calls": [
+        for round_index in range(max_rounds):
+            print(f"第 {round_index + 1} 轮")
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages.copy(),
+                tools=tools,
+                extra_body={"thinking": {"type": "disabled"}},
+                tool_choice="auto",
+            )
+            choice = response.choices[0]
+            message = choice.message
+            if choice.finish_reason == "length":
+                print("模型输出达到长度限制，本轮未完成")
+                break
+            if not message.tool_calls:
+                messages.append(
                     {
-                        "id": call.id,
-                        "type": "function",
-                        "function": {
-                            "name": call.function.name,
-                            "arguments": call.function.arguments,
-                        },
+                        "role": "assistant",
+                        "content": message.content,
                     }
-                    for call in function_calls
-                ],
-            }
-        )
-
-        for tool_call in function_calls:
-            print("调用 ID：", tool_call.id)
-            print("工具名：", tool_call.function.name)
-            print("参数（JSON 字符串）：", tool_call.function.arguments)
-            # 模型返回的 arguments 是 JSON 字符串，先转成字典
-            try:
-                arguments = json.loads(tool_call.function.arguments)
-                if not isinstance(arguments, dict):
-                    raise ValueError("工具参数必须是 JSON 对象")
-            except ValueError as error:
-                result = ToolResult(
-                    ok=False,
-                    error=ToolError(code="INVALID_ARGUMENTS", message=str(error)),
                 )
-            else:
-                result = executor.execute(tool_call.function.name, arguments)
-            print("工具执行结果：", result.model_dump())
+                print("模型没有请求工具调用，回答：", message.content)
+                print("messages:", messages)
+                break
 
-            # 3. tool_call_id 将执行结果与前面的调用请求一一对应。
+            # 当前只向模型提供 function 工具。
+            function_calls = [call for call in message.tool_calls if call.type == "function"]
+            if len(function_calls) != len(message.tool_calls):
+                raise ValueError("模型返回了不支持的工具调用类型")
+
+            # 2. 先记录模型的完整调用请求，再逐个追加对应结果。
             messages.append(
                 {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": result.model_dump_json(),
+                    "role": "assistant",
+                    "content": message.content,
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.function.name,
+                                "arguments": call.function.arguments,
+                            },
+                        }
+                        for call in function_calls
+                    ],
                 }
             )
 
-        # 4. 本阶段只演示两次请求；第二次要求模型根据结果直接回答。
-        final_response = client.chat.completions.create(
-            model=model,
-            messages=messages.copy(),
-            tools=tools,
-            tool_choice="none",
-            extra_body={"thinking": {"type": "disabled"}},
-        )
-        print("模型最终回答：", final_response.choices[0].message.content)
+            for tool_call in function_calls:
+                print("调用 ID：", tool_call.id)
+                print("工具名：", tool_call.function.name)
+                print("参数（JSON 字符串）：", tool_call.function.arguments)
+                # 模型返回的 arguments 是 JSON 字符串，先转成字典
+                try:
+                    arguments = json.loads(tool_call.function.arguments)
+                    if not isinstance(arguments, dict):
+                        raise ValueError("工具参数必须是 JSON 对象")
+                except ValueError as error:
+                    result = ToolResult(
+                        ok=False,
+                        error=ToolError(code="INVALID_ARGUMENTS", message=str(error)),
+                    )
+                else:
+                    result = executor.execute(tool_call.function.name, arguments)
+                print("工具执行结果：", result.model_dump())
+
+                # 3. tool_call_id 将执行结果与前面的调用请求一一对应。
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": result.model_dump_json(),
+                    }
+                )
+        else:
+            print("已达到最大请求轮数，任务尚未确认完成")
 
 
 if __name__ == "__main__":
